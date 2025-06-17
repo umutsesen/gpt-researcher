@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from fastapi import HTTPException
 import logging
+import tempfile
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -140,7 +141,19 @@ async def handle_start_command(websocket, data: str, manager):
         mcp_enabled,
         mcp_strategy,
         mcp_configs,
+        report_format, # Added
+        total_words,   # Added
+        language,      # Added
+        doc_path       # Added
     ) = extract_command_data(json_data)
+
+    # Debug logging for language parameter
+    if language:
+        print(f"[DEBUG] handle_start_command received language parameter: {language}")
+    
+    # Debug logging for doc_path parameter
+    if doc_path:
+        print(f"[DEBUG] handle_start_command received doc_path parameter: {doc_path}")
 
     if not task or not report_type:
         print("❌ Error: Missing task or report_type")
@@ -158,11 +171,10 @@ async def handle_start_command(websocket, data: str, manager):
         "query": task,
         "sources": [],
         "context": [],
-        "report": ""
-    })
+        "report": ""    })
 
     sanitized_filename = sanitize_filename(f"task_{int(time.time())}_{task}")
-
+    
     report = await manager.start_streaming(
         task,
         report_type,
@@ -176,6 +188,10 @@ async def handle_start_command(websocket, data: str, manager):
         mcp_enabled,
         mcp_strategy,
         mcp_configs,
+        report_format, # Added
+        total_words,   # Added
+        language,      # Added
+        doc_path       # Added
     )
     report = str(report)
     file_paths = await generate_report_files(report, sanitized_filename)
@@ -325,6 +341,20 @@ async def handle_websocket_communication(websocket, manager):
             running_task.cancel()
 
 def extract_command_data(json_data: Dict) -> tuple:
+    """
+    Parses and extracts command data from the given JSON object.
+    Returns a tuple of extracted data.
+    """
+    # Debug logging for language parameter
+    language = json_data.get("language")
+    if language:
+        print(f"[DEBUG] extract_command_data received language parameter: {language}")
+    
+    # Debug logging for doc_path parameter
+    doc_path = json_data.get("doc_path")
+    if doc_path:
+        print(f"[DEBUG] extract_command_data received doc_path parameter: {doc_path}")
+    
     return (
         json_data.get("task"),
         json_data.get("report_type"),
@@ -337,4 +367,44 @@ def extract_command_data(json_data: Dict) -> tuple:
         json_data.get("mcp_enabled", False),
         json_data.get("mcp_strategy", "fast"),
         json_data.get("mcp_configs", []),
+        json_data.get("report_format"), # Added
+        json_data.get("total_words"),   # Added
+        language,       # Added
+        doc_path        # Added
     )
+
+def cleanup_temp_folders():
+    """
+    Background service to cleanup old temporary folders
+    Runs every 30 minutes and removes folders older than 2 hours
+    """
+    while True:
+        try:
+            temp_base = os.path.join(tempfile.gettempdir(), "gpt_researcher_docs")
+            if not os.path.exists(temp_base):
+                time.sleep(1800)  # Sleep for 30 minutes
+                continue
+                
+            current_time = time.time()
+            cutoff_time = current_time - (2 * 3600)  # 2 hours ago
+            
+            for folder_name in os.listdir(temp_base):
+                folder_path = os.path.join(temp_base, folder_name)
+                
+                if os.path.isdir(folder_path):
+                    # Extract timestamp from folder name
+                    try:
+                        parts = folder_name.split('_')
+                        if len(parts) >= 3:
+                            timestamp = int(parts[1])  # timestamp is the second part
+                            
+                            if timestamp < cutoff_time:
+                                shutil.rmtree(folder_path)
+                                logger.info(f"Cleaned up old temp folder: {folder_path}")
+                    except (ValueError, IndexError, OSError) as e:
+                        logger.warning(f"Could not process temp folder {folder_path}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error in cleanup_temp_folders: {e}")
+            
+        time.sleep(1800)  # Sleep for 30 minutes

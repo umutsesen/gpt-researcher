@@ -1,5 +1,8 @@
 import asyncio
 import datetime
+import tempfile
+import json
+import os
 from typing import Dict, List
 
 from fastapi import WebSocket
@@ -11,6 +14,40 @@ from gpt_researcher.utils.enum import ReportType, Tone
 from multi_agents.main import run_research_task
 from gpt_researcher.actions import stream_output  # Import stream_output
 from backend.server.server_utils import CustomLogsHandler
+
+
+def create_temp_config_with_doc_path(doc_path: str) -> str:
+    """
+    Create a temporary config file with the specified doc_path
+    """
+    temp_config = {
+        "DOC_PATH": doc_path
+    }
+    
+    # Create a temporary file
+    temp_fd, temp_path = tempfile.mkstemp(suffix='.json', prefix='gpt_researcher_config_')
+    
+    try:
+        with os.fdopen(temp_fd, 'w') as tmp_file:
+            json.dump(temp_config, tmp_file)
+        
+        print(f"[DEBUG] Created temp config at {temp_path} with DOC_PATH: {doc_path}")
+        return temp_path
+    except Exception as e:
+        print(f"[ERROR] Failed to create temp config: {e}")
+        os.close(temp_fd)
+        return None
+
+def cleanup_temp_config(config_path: str):
+    """
+    Clean up temporary config file
+    """
+    try:
+        if config_path and os.path.exists(config_path):
+            os.unlink(config_path)
+            print(f"[DEBUG] Cleaned up temp config: {config_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to cleanup temp config {config_path}: {e}")
 
 
 class WebSocketManager:
@@ -71,20 +108,27 @@ class WebSocketManager:
                 del self.message_queues[websocket]
             try:
                 await websocket.close()
-            except:
-                pass  # Connection might already be closed
+            except:                pass  # Connection might already be closed
 
-    async def start_streaming(self, task, report_type, report_source, source_urls, document_urls, tone, websocket, headers=None, query_domains=[], mcp_enabled=False, mcp_strategy="fast", mcp_configs=[]):
+    async def start_streaming(self, task, report_type, report_source, source_urls, document_urls, tone, websocket, headers=None, query_domains=[], mcp_enabled=False, mcp_strategy="fast", mcp_configs=[], report_format: str | None = None, total_words: int | None = None, language: str | None = None, doc_path: str | None = None):
         """Start streaming the output."""
         tone = Tone[tone]
         # add customized JSON config file path here
         config_path = "default"
         
+        # Debug logging for doc_path parameter
+        if doc_path:
+            print(f"[DEBUG] start_streaming received doc_path parameter: {doc_path}")
+        
         # Pass MCP parameters to run_agent
         report = await run_agent(
             task, report_type, report_source, source_urls, document_urls, tone, websocket, 
             headers=headers, query_domains=query_domains, config_path=config_path,
-            mcp_enabled=mcp_enabled, mcp_strategy=mcp_strategy, mcp_configs=mcp_configs
+            mcp_enabled=mcp_enabled, mcp_strategy=mcp_strategy, mcp_configs=mcp_configs,
+            report_format=report_format, # Added
+            total_words=total_words,     # Added
+            language=language,           # Added
+            doc_path=doc_path            # Added
         )
         
         # Create new Chat Agent whenever a new report is written
@@ -98,10 +142,23 @@ class WebSocketManager:
         else:
             await websocket.send_json({"type": "chat", "content": "Knowledge empty, please run the research first to obtain knowledge"})
 
-async def run_agent(task, report_type, report_source, source_urls, document_urls, tone: Tone, websocket, stream_output=stream_output, headers=None, query_domains=[], config_path="", return_researcher=False, mcp_enabled=False, mcp_strategy="fast", mcp_configs=[]):
+async def run_agent(task, report_type, report_source, source_urls, document_urls, tone: Tone, websocket, stream_output=stream_output, headers=None, query_domains=[], config_path="", return_researcher=False, mcp_enabled=False, mcp_strategy="fast", mcp_configs=[], report_format: str | None = None, total_words: int | None = None, language: str | None = None, doc_path: str | None = None):
     """Run the agent."""    
     # Create logs handler for this research task
     logs_handler = CustomLogsHandler(websocket, task)
+
+    # Debug logging for doc_path parameter
+    if doc_path:
+        print(f"[DEBUG] run_agent received doc_path parameter: {doc_path}")
+
+    # Create a custom config path if doc_path is provided
+    custom_config_path = None
+    if doc_path:
+        custom_config_path = create_temp_config_with_doc_path(doc_path)
+        print(f"[DEBUG] run_agent - created custom config at: {custom_config_path}")
+    
+    # Use custom config if available, otherwise use the provided config_path
+    final_config_path = custom_config_path or config_path
 
     # Set up MCP configuration if enabled
     if mcp_enabled and mcp_configs:
@@ -124,12 +181,10 @@ async def run_agent(task, report_type, report_source, source_urls, document_urls
     # Initialize researcher based on report type
     if report_type == "multi_agents":
         report = await run_research_task(
-            query=task, 
-            websocket=logs_handler,  # Use logs_handler instead of raw websocket
+            query=task,            websocket=logs_handler,  # Use logs_handler instead of raw websocket
             stream_output=stream_output, 
             tone=tone, 
-            headers=headers
-        )
+            headers=headers        )
         report = report.get("report", "")
 
     elif report_type == ReportType.DetailedReport.value:
@@ -141,11 +196,14 @@ async def run_agent(task, report_type, report_source, source_urls, document_urls
             source_urls=source_urls,
             document_urls=document_urls,
             tone=tone,
-            config_path=config_path,
-            websocket=logs_handler,  # Use logs_handler instead of raw websocket
+            config_path=final_config_path,  # Use the config with doc_path            websocket=logs_handler,  # Use logs_handler instead of raw websocket
             headers=headers,
             mcp_configs=mcp_configs if mcp_enabled else None,
             mcp_strategy=mcp_strategy if mcp_enabled else None,
+            report_format=report_format,  # Added
+            total_words=total_words,      # Added
+            language=language,            # Added
+            doc_path=doc_path,            # Added
         )
         report = await researcher.run()
         
@@ -158,13 +216,21 @@ async def run_agent(task, report_type, report_source, source_urls, document_urls
             source_urls=source_urls,
             document_urls=document_urls,
             tone=tone,
-            config_path=config_path,
+            config_path=final_config_path,  # Use the config with doc_path
             websocket=logs_handler,  # Use logs_handler instead of raw websocket
             headers=headers,
             mcp_configs=mcp_configs if mcp_enabled else None,
             mcp_strategy=mcp_strategy if mcp_enabled else None,
+            report_format=report_format,  # Added
+            total_words=total_words,      # Added
+            language=language,            # Added
+            doc_path=doc_path,            # Added
         )
         report = await researcher.run()
+
+    # Cleanup temp config if created
+    if custom_config_path:
+        cleanup_temp_config(custom_config_path)
 
     if report_type != "multi_agents" and return_researcher:
         return report, researcher.gpt_researcher

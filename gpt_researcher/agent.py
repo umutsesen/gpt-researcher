@@ -59,6 +59,8 @@ class GPTResearcher:
         mcp_configs: list[dict] | None = None,
         mcp_max_iterations: int | None = None,
         mcp_strategy: str | None = None,
+        total_words: int | None = None, # Added
+        language: str | None = None, # Added
         **kwargs
     ):
         """
@@ -109,15 +111,23 @@ class GPTResearcher:
                     "name": "search"
                 }]
                 ```
-            mcp_strategy (str, optional): MCP execution strategy. Options:
-                - "fast" (default): Run MCP once with original query for best performance
+            mcp_strategy (str, optional): MCP execution strategy. Options:                - "fast" (default): Run MCP once with original query for best performance
                 - "deep": Run MCP for all sub-queries for maximum thoroughness  
                 - "disabled": Skip MCP entirely, use only web retrievers
         """
         self.kwargs = kwargs
         self.query = query
         self.report_type = report_type
-        self.cfg = Config(config_path)
+        
+        # Debug logging for language parameter
+        if language:
+            print(f"[DEBUG] GPTResearcher received language parameter: {language}")
+        
+        self.cfg = Config(config_path, report_format=report_format, total_words=total_words, language=language) # Modified
+        
+        # Debug logging for final config language
+        print(f"[DEBUG] Final config language: {self.cfg.language}")
+        
         self.cfg.set_verbose(verbose)
         self.report_source = report_source if report_source else getattr(self.cfg, 'report_source', None)
         self.report_format = report_format

@@ -21,7 +21,10 @@ class DetailedReport:
         headers: Optional[Dict] = None,
         complement_source_urls: bool = False,
         mcp_configs=None,
-        mcp_strategy=None,
+        mcp_strategy=None,        report_format: str = None,  # Added
+        total_words: int = None,    # Added
+        language: str = None,       # Added
+        doc_path: str = None,       # Added
     ):
         self.query = query
         self.report_type = report_type
@@ -36,6 +39,17 @@ class DetailedReport:
         self.headers = headers or {}
         self.complement_source_urls = complement_source_urls
         
+        # Debug logging for language parameter
+        if language:
+            print(f"[DEBUG] DetailedReport received language parameter: {language}")
+        if doc_path:
+            print(f"[DEBUG] DetailedReport received doc_path parameter: {doc_path}")
+        
+        # Override doc_path in config if provided
+        config_path_to_use = self.config_path
+        if doc_path:
+            config_path_to_use = self._create_temp_config(doc_path)
+        
         # Initialize researcher with optional MCP parameters
         gpt_researcher_params = {
             "query": self.query,
@@ -44,10 +58,13 @@ class DetailedReport:
             "report_source": self.report_source,
             "source_urls": self.source_urls,
             "document_urls": self.document_urls,
-            "config_path": self.config_path,
+            "config_path": config_path_to_use,
             "tone": self.tone,
             "websocket": self.websocket,
             "headers": self.headers,
+            "report_format": report_format,  # Added
+            "total_words": total_words,      # Added
+            "language": language,            # Added
             "complement_source_urls": self.complement_source_urls,
         }
         
@@ -58,13 +75,37 @@ class DetailedReport:
             gpt_researcher_params["mcp_strategy"] = mcp_strategy
             
         self.gpt_researcher = GPTResearcher(**gpt_researcher_params)
-        self.existing_headers: List[Dict] = []
-        self.global_context: List[str] = []
-        self.global_written_sections: List[str] = []
-        self.global_urls: Set[str] = set(
-            self.source_urls) if self.source_urls else set()
 
-    async def run(self) -> str:
+    def _create_temp_config(self, doc_path: str) -> str:
+        """Create a temporary config with custom DOC_PATH"""
+        import json
+        import tempfile
+        import os
+        from gpt_researcher.config.variables.default import DEFAULT_CONFIG
+        
+        # Create a copy of default config
+        temp_config = DEFAULT_CONFIG.copy()
+        temp_config["DOC_PATH"] = doc_path
+        
+        # Create temporary config file
+        temp_config_fd, temp_config_path = tempfile.mkstemp(suffix='.json', prefix='gpt_researcher_config_')
+        try:
+            with os.fdopen(temp_config_fd, 'w') as f:
+                json.dump(temp_config, f, indent=2)
+            return temp_config_path
+        except:
+            os.close(temp_config_fd)
+            raise
+
+    async def run(self):
+        """
+        Run the detailed research process.
+        """
+        # If subtopics are provided, use them directly
+        if self.subtopics and len(self.subtopics) > 0:
+            print(f"[DEBUG] Running detailed report with provided subtopics: {self.subtopics}")
+            return await self._generate_subtopic_reports(self.subtopics)
+
         await self._initial_research()
         subtopics = await self._get_all_subtopics()
         report_introduction = await self.gpt_researcher.write_introduction()

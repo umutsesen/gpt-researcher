@@ -13,7 +13,7 @@ class Config:
 
     CONFIG_DIR = os.path.join(os.path.dirname(__file__), "variables")
 
-    def __init__(self, config_path: str | None = None):
+    def __init__(self, config_path: str | None = None, report_format: str | None = None, total_words: int | None = None, language: str | None = None): # Modified
         """Initialize the config class."""
         self.config_path = config_path
         self.llm_kwargs: Dict[str, Any] = {}
@@ -21,6 +21,18 @@ class Config:
 
         config_to_use = self.load_config(config_path)
         self._set_attributes(config_to_use)
+
+        # Override with parameters if provided
+        if report_format is not None:
+            print(f"[DEBUG] Config overriding report_format: {self.report_format} -> {report_format}")
+            self.report_format = report_format
+        if total_words is not None:
+            print(f"[DEBUG] Config overriding total_words: {self.total_words} -> {total_words}")
+            self.total_words = total_words
+        if language is not None:
+            print(f"[DEBUG] Config overriding language: {self.language} -> {language}")
+            self.language = language
+
         self._set_embedding_attributes()
         self._set_llm_attributes()
         self._handle_deprecated_attributes()
